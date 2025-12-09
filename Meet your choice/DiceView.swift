@@ -10,41 +10,87 @@ struct DiceView: View {
 
     var body: some View {
         ZStack {
+            Color.black.ignoresSafeArea(.all)
+            
             DiceViewContainer(faceCount: faceCount, onResult: { number in
-                lastResult = number
-                // Show the winner text for 5 seconds
-                DispatchQueue.main.asyncAfter(deadline: .now() + 5.0) {
-                    withAnimation(.easeOut(duration: 0.3)) {
+                withAnimation(.spring(response: 0.6, dampingFraction: 0.8)) {
+                    lastResult = number
+                }
+                // Show the winner text for 3 seconds (same duration as fireworks)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
+                    withAnimation(.easeOut(duration: 0.4)) {
                         lastResult = nil
                     }
                 }
+            }, onRollStart: {
+                // Hide the winner message immediately when a new roll starts
+                withAnimation(.easeOut(duration: 0.2)) {
+                    lastResult = nil
+                }
             })
-            .edgesIgnoringSafeArea(.all)
+            .ignoresSafeArea(.all)
 
             if let number = lastResult {
                 VStack {
                     Spacer()
-                    Text("d\(faceCount): \(number)")
-                        .font(.system(size: 36, weight: .bold))
-                        .padding(.horizontal, 20)
-                        .padding(.vertical, 12)
-                        .background(.ultraThinMaterial)
-                        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                        .padding(.bottom, 24)
-                        .transition(.opacity)
+                    VStack(spacing: 16) {
+                        Text("The winner is:")
+                            .font(.system(size: 28, weight: .semibold))
+                            .foregroundColor(.white)
+                        
+                        HStack(spacing: 12) {
+                            // Show the winning face
+                            WinningFaceView(number: number, faceCount: faceCount)
+                                .frame(width: 60, height: 60)
+                            
+                            // Display result based on face count
+                            if faceCount == 2 {
+                                Text(number == 1 ? "Cross" : "Head")
+                                    .font(.system(size: 36, weight: .bold))
+                                    .foregroundColor(.white)
+                            } else {
+                                Text("d\(faceCount): \(number)")
+                                    .font(.system(size: 36, weight: .bold))
+                                    .foregroundColor(.white)
+                            }
+                        }
+                    }
+                    .padding(.horizontal, 24)
+                    .padding(.vertical, 20)
+                    .background(.ultraThinMaterial)
+                    .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                    .padding(.bottom, 24)
+                    .transition(.opacity.combined(with: .scale(scale: 0.8)))
                 }
             }
 
             VStack {
                 HStack {
                     Spacer()
-                    Button("Customize") {
+                    Button(action: {
                         showCustomize = true
+                    }) {
+                        HStack(spacing: 8) {
+                            Image(systemName: "slider.horizontal.3")
+                                .font(.system(size: 16, weight: .medium))
+                            Text("Customize")
+                                .font(.system(size: 16, weight: .semibold))
+                        }
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 12)
+                        .background(
+                            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                .fill(.ultraThinMaterial)
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                        .stroke(.white.opacity(0.2), lineWidth: 1)
+                                )
+                        )
+                        .shadow(color: .black.opacity(0.3), radius: 8, x: 0, y: 4)
                     }
-                    .padding(12)
-                    .background(.ultraThinMaterial)
-                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                    .padding([.top, .trailing], 16)
+                    .buttonStyle(CustomizeButtonStyle())
+                    .padding([.top, .trailing], 20)
                 }
                 Spacer()
             }
@@ -52,20 +98,22 @@ struct DiceView: View {
                 CustomizeSheet(faceCount: $faceCount)
             }
         }
+        .preferredColorScheme(.dark)
     }
 }
 
 struct DiceViewContainer: UIViewRepresentable {
     var faceCount: Int = 6
     var onResult: ((Int) -> Void)? = nil
+    var onRollStart: (() -> Void)? = nil
     private let playPlaneZ: Float = -0.5
     private var sideThickness: Float { 0.02 }
     
     func makeUIView(context: Context) -> ARView {
         let arView = ShakeARView(frame: .zero)
         
-        // Set background color (no AR camera)
-        arView.environment.background = .color(.clear)
+        // Set background color (black)
+        arView.environment.background = .color(.black)
         
         arView.onShake = { [weak coordinator = context.coordinator] in
             coordinator?.rollDice()
@@ -94,8 +142,9 @@ struct DiceViewContainer: UIViewRepresentable {
         
         // Create and position dice
         let dice = createDice(for: faceCount)
-        dice.position = [0, 0, -0.5]
+        dice.position = [0, 0.25, -0.5] // Start well above the floor (adjusted for larger size)
         anchor.addChild(dice)
+        print("Dice created at position: \(dice.position)")
         // Temporarily make the dice kinematic until boundaries are installed
         if var body = dice.components[PhysicsBodyComponent.self] {
             body.mode = .kinematic
@@ -124,6 +173,7 @@ struct DiceViewContainer: UIViewRepresentable {
         context.coordinator.arView = arView
         context.coordinator.dice = dice
         context.coordinator.onResult = onResult
+        context.coordinator.onRollStart = onRollStart
         context.coordinator.fireworksView = fireworks
         context.coordinator.faceCount = faceCount
         
@@ -165,12 +215,13 @@ struct DiceViewContainer: UIViewRepresentable {
     }
     
     func createDice(for faces: Int) -> ModelEntity {
-        if faces == 4 {
-            return createTetrahedronDie()
-        } else if faces != 6 {
-            return createPrismDie(sides: max(3, faces))
+        if faces == 2 {
+            return createCoinDie()
+        } else if faces == 12 {
+            return createDodecahedronDie()
         }
-        let size: Float = 0.1
+        // Default: dado a 6 facce
+        let size: Float = 0.15
         let half: Float = size / 2
         let epsilon: Float = 0.001 // slightly larger offset to avoid z-fighting
 
@@ -185,8 +236,8 @@ struct DiceViewContainer: UIViewRepresentable {
                 mat.color = .init(tint: .white, texture: .init(textureResource))
                 mat.faceCulling = .none
             } else {
-                // Fallback: solid black face if texture generation fails
-                mat.color = .init(tint: .black)
+                // Fallback: solid white face if texture generation fails
+                mat.color = .init(tint: .white)
                 mat.faceCulling = .none
             }
             return mat
@@ -278,204 +329,104 @@ struct DiceViewContainer: UIViewRepresentable {
         return dice
     }
     
-    func createPrismDie(sides: Int) -> ModelEntity {
-        let radius: Float = 0.06
-        let height: Float = 0.1
-        var descriptor = MeshDescriptor()
-
-        // Generate vertices for top and bottom n-gon
-        var positions: [SIMD3<Float>] = []
-        var normals: [SIMD3<Float>] = []
-        var uvs: [SIMD2<Float>] = []
-        let topY: Float = height / 2
-        let bottomY: Float = -height / 2
-
-        for i in 0..<sides {
-            let angle = (Float(i) / Float(sides)) * (2 * .pi)
-            let x = cos(angle) * radius
-            let z = sin(angle) * radius
-            // Top ring
-            positions.append([x, topY, z])
-            normals.append(simd_normalize([x, 0, z]))
-            uvs.append([Float(i)/Float(sides), 0])
-            // Bottom ring
-            positions.append([x, bottomY, z])
-            normals.append(simd_normalize([x, 0, z]))
-            uvs.append([Float(i)/Float(sides), 1])
-        }
-
-        // Center vertices for caps
-        let topCenterIndex = positions.count
-        positions.append([0, topY, 0])
-        normals.append([0, 1, 0])
-        uvs.append([0.5, 0.5])
-
-        let bottomCenterIndex = positions.count
-        positions.append([0, bottomY, 0])
-        normals.append([0, -1, 0])
-        uvs.append([0.5, 0.5])
-
-        // Indices
-        var indices: [UInt32] = []
-
-        // Side faces (two triangles per side)
-        for i in 0..<sides {
-            let next = (i + 1) % sides
-            let topA = UInt32(i * 2)
-            let botA = UInt32(i * 2 + 1)
-            let topB = UInt32(next * 2)
-            let botB = UInt32(next * 2 + 1)
-            // Triangle 1
-            indices.append(contentsOf: [topA, botA, topB])
-            // Triangle 2
-            indices.append(contentsOf: [botA, botB, topB])
-        }
-
-        // Top cap (fan)
-        for i in 0..<sides {
-            let next = (i + 1) % sides
-            let topA = UInt32(i * 2)
-            let topB = UInt32(next * 2)
-            indices.append(contentsOf: [UInt32(topCenterIndex), topB, topA])
-        }
-
-        // Bottom cap (fan)
-        for i in 0..<sides {
-            let next = (i + 1) % sides
-            let botA = UInt32(i * 2 + 1)
-            let botB = UInt32(next * 2 + 1)
-            indices.append(contentsOf: [UInt32(bottomCenterIndex), botA, botB])
-        }
-
-        descriptor.positions = .init(positions)
-        descriptor.normals = .init(normals)
-        descriptor.primitives = .triangles(indices)
-
-        let mesh: MeshResource
-        do {
-            mesh = try MeshResource.generate(from: [descriptor])
-        } catch {
-            // Fallback to a simple box if mesh generation fails
-            return createDice(for: 6)
-        }
-
-        var material = SimpleMaterial()
-        material.color = .init(tint: .black)
-        let die = ModelEntity(mesh: mesh, materials: [material])
-
-        // Physics setup (convex box approximation)
-        let physicsMaterial = PhysicsMaterialResource.generate(
-            staticFriction: 0.05,
-            dynamicFriction: 0.03,
-            restitution: 0.9
+    func addLighting(to anchor: AnchorEntity) {
+        // Add directional light
+        let directionalLight = DirectionalLightComponent(
+            color: .white,
+            intensity: 500,
+            isRealWorldProxy: false
         )
-        die.components.set(PhysicsBodyComponent(massProperties: .default, material: physicsMaterial, mode: .dynamic))
-        if die.components[PhysicsMotionComponent.self] == nil {
-            die.components.set(PhysicsMotionComponent())
-        }
-        if var body = die.components[PhysicsBodyComponent.self] {
-            body.linearDamping = 0.02
-            body.angularDamping = 0.02
-            die.components.set(body)
-        }
-        // Collision: convex from mesh if available, else box
-        do {
-            let shape = try ShapeResource.generateConvex(from: mesh)
-            die.collision = CollisionComponent(shapes: [shape])
-        } catch {
-            die.collision = CollisionComponent(shapes: [.generateBox(size: [radius * 2, height, radius * 2])])
-        }
-
-        return die
+        
+        let lightEntity = Entity()
+        lightEntity.components.set(directionalLight)
+        lightEntity.position = [0.5, 1, 0.5]
+        lightEntity.look(at: [0, 0, 0], from: lightEntity.position, relativeTo: nil)
+        
+        anchor.addChild(lightEntity)
     }
     
-    func createTetrahedronDie() -> ModelEntity {
-        // Regular tetrahedron vertices centered at origin
-        // Using vertices at permutations of (±1, ±1, ±1) with an odd number of negatives
-        let v0 = SIMD3<Float>( 1,  1,  1)
-        let v1 = SIMD3<Float>( 1, -1, -1)
-        let v2 = SIMD3<Float>(-1,  1, -1)
-        let v3 = SIMD3<Float>(-1, -1,  1)
+    func createFloor(width: Float, depth: Float, z: Float) -> ModelEntity {
+        // Create a simple box as floor instead of a rotated plane
+        let floorMesh = MeshResource.generateBox(width: width, height: 0.02, depth: depth)
+        
+        var floorMaterial = SimpleMaterial()
+        floorMaterial.color = .init(tint: .black) // Floor nero
+        floorMaterial.roughness = 0.8
+        floorMaterial.metallic = 0.0
+        
+        let floor = ModelEntity(mesh: floorMesh, materials: [floorMaterial])
+        // Position the floor at Y = -0.01 (half thickness below zero) and at the specified z
+        floor.position = [0, -0.01, z]
+        
+        // Physics for the floor
+        let physicsMaterial = PhysicsMaterialResource.generate(
+            staticFriction: 0.8,
+            dynamicFriction: 0.6,
+            restitution: 0.3
+        )
+        
+        floor.components.set(PhysicsBodyComponent(
+            massProperties: .default,
+            material: physicsMaterial,
+            mode: .static
+        ))
+        
+        // Simple box collision that matches the mesh exactly
+        floor.collision = CollisionComponent(
+            shapes: [.generateBox(width: width, height: 0.02, depth: depth)]
+        )
+        
+        print("📦 Floor created at position: \(floor.position), size: \(width)x0.02x\(depth)")
+        print("📦 Expected dice rest Y: 0.075 (floor top 0 + dice half 0.075)")
+        
+        return floor
+    }
+    
+    func createCoinDie() -> ModelEntity {
+        // Thin cylinder acting as a 2-sided die (coin)
+        let radius: Float = 0.11 // Aumentato per essere proporzionale al dado più grande
+        let thickness: Float = 0.025
+        let epsilon: Float = 0.0015
 
-        // Scale to a comfortable size (circumradius about ~0.085)
-        let targetRadius: Float = 0.085
-        let currentRadius: Float = length(v0) // all have same length sqrt(3)
-        let s: Float = targetRadius / currentRadius
+        // Base cylinder
+        let baseMesh = MeshResource.generateCylinder(height: thickness, radius: radius)
+        var baseMaterial = SimpleMaterial()
+        baseMaterial.color = .init(tint: .white) // Moneta bianca
+        let coin = ModelEntity(mesh: baseMesh, materials: [baseMaterial])
 
-        let p0 = v0 * s
-        let p1 = v1 * s
-        let p2 = v2 * s
-        let p3 = v3 * s
-
-        // Triangular faces (ensure counter-clockwise winding when looking from outside)
-        let faces: [[SIMD3<Float>]] = [
-            [p0, p1, p2],
-            [p0, p3, p1],
-            [p0, p2, p3],
-            [p1, p3, p2]
-        ]
-
-        var descriptor = MeshDescriptor()
-        var positions: [SIMD3<Float>] = []
-        var normals: [SIMD3<Float>] = []
-        var indices: [UInt32] = []
-
-        for (fi, tri) in faces.enumerated() {
-            let a = tri[0]
-            let b = tri[1]
-            let c = tri[2]
-            let n = normalize(cross(b - a, c - a))
-            let base = UInt32(positions.count)
-            positions.append(contentsOf: [a, b, c])
-            normals.append(contentsOf: [n, n, n])
-            indices.append(contentsOf: [base, base + 1, base + 2])
-        }
-
-        descriptor.positions = .init(positions)
-        descriptor.normals = .init(normals)
-        descriptor.primitives = .triangles(indices)
-
-        let mesh: MeshResource
+        // Top overlay (face 2) — oriented upward (+Y)
+        let planeMesh = MeshResource.generatePlane(width: radius * 1.75, depth: radius * 1.75)
         do {
-            mesh = try MeshResource.generate(from: [descriptor])
-        } catch {
-            return createDice(for: 6)
+            var topMat = SimpleMaterial()
+            if let cg = createCoinFaceTexture(heads: true),
+               let tex = try? TextureResource(image: cg, options: .init(semantic: .color)) {
+                topMat.color = .init(tint: .white, texture: .init(tex))
+                topMat.faceCulling = .none
+            } else {
+                topMat.color = .init(tint: .white)
+                topMat.faceCulling = .none
+            }
+            let top = ModelEntity(mesh: planeMesh, materials: [topMat])
+            top.position = [0, thickness / 2 + epsilon, 0]
+            top.orientation = simd_quatf(angle: 0, axis: [1, 0, 0])
+            coin.addChild(top)
         }
 
-        var material = SimpleMaterial()
-        material.color = .init(tint: .black)
-        let die = ModelEntity(mesh: mesh, materials: [material])
-
-        // Add textured overlays with white pips for each face
-        let overlayOffset: Float = 0.0015 // lift overlays slightly above the face to avoid z-fighting
-        for (index, tri) in faces.enumerated() {
-            let a = tri[0]
-            let b = tri[1]
-            let c = tri[2]
-            let n = normalize(cross(b - a, c - a))
-
-            var faceDesc = MeshDescriptor()
-            // Slightly offset along the normal to avoid z-fighting with the base mesh
-            faceDesc.positions = .init([a + n * overlayOffset, b + n * overlayOffset, c + n * overlayOffset])
-            faceDesc.normals = .init([n, n, n])
-            // Map the triangle to a full square texture using a conventional triangle UV
-            faceDesc.textureCoordinates = .init([SIMD2<Float>(0.5, 1.0), SIMD2<Float>(0.0, 0.0), SIMD2<Float>(1.0, 0.0)])
-            faceDesc.primitives = .triangles([0, 1, 2])
-
-            guard let faceMesh = try? MeshResource.generate(from: [faceDesc]) else { continue }
-
-            var faceMaterial = SimpleMaterial()
-            if let cgImage = createTetraFaceTexture(number: index + 1),
-               let textureResource = try? TextureResource(image: cgImage, options: .init(semantic: .color)) {
-                faceMaterial.color = .init(tint: .white, texture: .init(textureResource))
-                faceMaterial.faceCulling = .none
+        // Bottom overlay (face 1) — oriented downward (-Y)
+        do {
+            var bottomMat = SimpleMaterial()
+            if let cg = createCoinFaceTexture(heads: false),
+               let tex = try? TextureResource(image: cg, options: .init(semantic: .color)) {
+                bottomMat.color = .init(tint: .white, texture: .init(tex))
+                bottomMat.faceCulling = .none
             } else {
-                faceMaterial.color = .init(tint: .black)
-                faceMaterial.faceCulling = .none
+                bottomMat.color = .init(tint: .white)
+                bottomMat.faceCulling = .none
             }
-
-            let faceEntity = ModelEntity(mesh: faceMesh, materials: [faceMaterial])
-            die.addChild(faceEntity)
+            let bottom = ModelEntity(mesh: planeMesh, materials: [bottomMat])
+            bottom.position = [0, -thickness / 2 - epsilon, 0]
+            bottom.orientation = simd_quatf(angle: .pi, axis: [1, 0, 0])
+            coin.addChild(bottom)
         }
 
         // Physics and collision
@@ -484,6 +435,119 @@ struct DiceViewContainer: UIViewRepresentable {
             dynamicFriction: 0.03,
             restitution: 0.9
         )
+        coin.components.set(PhysicsBodyComponent(
+            massProperties: .default,
+            material: physicsMaterial,
+            mode: .dynamic
+        ))
+        if coin.components[PhysicsMotionComponent.self] == nil {
+            coin.components.set(PhysicsMotionComponent())
+        }
+        if var body = coin.components[PhysicsBodyComponent.self] {
+            body.linearDamping = 0.02
+            body.angularDamping = 0.02
+            coin.components.set(body)
+        }
+        // Collision: try convex from the cylinder mesh; fallback to box
+        do {
+            let shape = try ShapeResource.generateConvex(from: baseMesh)
+            coin.collision = CollisionComponent(shapes: [shape])
+        } catch {
+            coin.collision = CollisionComponent(shapes: [.generateBox(size: [radius * 2, thickness, radius * 2])])
+        }
+
+        return coin
+    }
+    
+    func createDodecahedronDie() -> ModelEntity {
+        // Dodecaedro regolare (12 facce pentagonali)
+        let phi: Float = (1.0 + sqrt(5.0)) / 2.0 // rapporto aureo
+        let scale: Float = 0.08 // Scala per dimensione appropriata
+        
+        // Vertici del dodecaedro (coordinate normalizzate)
+        let vertices: [SIMD3<Float>] = [
+            SIMD3<Float>(1, 1, 1),
+            SIMD3<Float>(1, 1, -1),
+            SIMD3<Float>(1, -1, 1),
+            SIMD3<Float>(1, -1, -1),
+            SIMD3<Float>(-1, 1, 1),
+            SIMD3<Float>(-1, 1, -1),
+            SIMD3<Float>(-1, -1, 1),
+            SIMD3<Float>(-1, -1, -1),
+            SIMD3<Float>(0, phi, 1/phi),
+            SIMD3<Float>(0, phi, -1/phi),
+            SIMD3<Float>(0, -phi, 1/phi),
+            SIMD3<Float>(0, -phi, -1/phi),
+            SIMD3<Float>(1/phi, 0, phi),
+            SIMD3<Float>(-1/phi, 0, phi),
+            SIMD3<Float>(1/phi, 0, -phi),
+            SIMD3<Float>(-1/phi, 0, -phi),
+            SIMD3<Float>(phi, 1/phi, 0),
+            SIMD3<Float>(phi, -1/phi, 0),
+            SIMD3<Float>(-phi, 1/phi, 0),
+            SIMD3<Float>(-phi, -1/phi, 0)
+        ].map { $0 * scale }
+        
+        // Le 12 facce pentagonali (indici dei vertici)
+        let faces: [[Int]] = [
+            [0, 8, 9, 1, 16],
+            [0, 12, 13, 4, 8],
+            [0, 16, 17, 2, 12],
+            [1, 9, 5, 15, 14],
+            [1, 14, 3, 17, 16],
+            [2, 10, 11, 3, 17],
+            [2, 12, 13, 6, 10],
+            [3, 11, 7, 15, 14],
+            [4, 8, 9, 5, 18],
+            [4, 13, 6, 19, 18],
+            [5, 9, 8, 4, 18],
+            [6, 10, 11, 7, 19]
+        ]
+        
+        var descriptor = MeshDescriptor()
+        var positions: [SIMD3<Float>] = []
+        var normals: [SIMD3<Float>] = []
+        var indices: [UInt32] = []
+        
+        // Converti ogni pentagono in triangoli
+        for face in faces {
+            let center = face.reduce(SIMD3<Float>(0,0,0)) { $0 + vertices[$1] } / Float(face.count)
+            let normal = normalize(cross(vertices[face[1]] - vertices[face[0]], vertices[face[2]] - vertices[face[0]]))
+            
+            for i in 0..<face.count {
+                let next = (i + 1) % face.count
+                let base = UInt32(positions.count)
+                
+                positions.append(vertices[face[i]])
+                positions.append(vertices[face[next]])
+                positions.append(center)
+                
+                normals.append(contentsOf: [normal, normal, normal])
+                indices.append(contentsOf: [base, base + 1, base + 2])
+            }
+        }
+        
+        descriptor.positions = .init(positions)
+        descriptor.normals = .init(normals)
+        descriptor.primitives = .triangles(indices)
+        
+        let mesh: MeshResource
+        do {
+            mesh = try MeshResource.generate(from: [descriptor])
+        } catch {
+            return createDice(for: 6) // Fallback
+        }
+        
+        var material = SimpleMaterial()
+        material.color = .init(tint: .white) // Dodecaedro bianco
+        let die = ModelEntity(mesh: mesh, materials: [material])
+        
+        // Physics setup
+        let physicsMaterial = PhysicsMaterialResource.generate(
+            staticFriction: 0.05,
+            dynamicFriction: 0.03,
+            restitution: 0.9
+        )
         die.components.set(PhysicsBodyComponent(massProperties: .default, material: physicsMaterial, mode: .dynamic))
         if die.components[PhysicsMotionComponent.self] == nil {
             die.components.set(PhysicsMotionComponent())
@@ -493,119 +557,30 @@ struct DiceViewContainer: UIViewRepresentable {
             body.angularDamping = 0.02
             die.components.set(body)
         }
-
+        
         do {
             let shape = try ShapeResource.generateConvex(from: mesh)
             die.collision = CollisionComponent(shapes: [shape])
         } catch {
-            // Fallback: approximate with a box
-            die.collision = CollisionComponent(shapes: [.generateBox(size: [targetRadius * 2, targetRadius * 2, targetRadius * 2])])
+            die.collision = CollisionComponent(shapes: [.generateBox(size: [scale * 4, scale * 4, scale * 4])])
         }
-
+        
         return die
     }
-    
-    func createTetraFaceTexture(number: Int) -> CGImage? {
-        let size = CGSize(width: 512, height: 512)
-        let renderer = UIGraphicsImageRenderer(size: size)
-        let image = renderer.image { context in
-            // Background: black
-            UIColor.black.setFill()
-            context.fill(CGRect(origin: .zero, size: size))
 
-            // Draw white pips (circles)
-            let cg = context.cgContext
-            cg.setShouldAntialias(true)
-            cg.setFillColor(UIColor.white.cgColor)
-
-            // Define triangle corners in texture space matching the UVs used above
-            let top = CGPoint(x: size.width * 0.5, y: size.height * 0.08)
-            let left = CGPoint(x: size.width * 0.10, y: size.height * 0.90)
-            let right = CGPoint(x: size.width * 0.90, y: size.height * 0.90)
-
-            // Helper to draw a dot
-            func dot(_ p: CGPoint, r: CGFloat) {
-                cg.fillEllipse(in: CGRect(x: p.x - r, y: p.y - r, width: 2*r, height: 2*r))
-            }
-
-            // Reasonable radius for 512x512
-            let r: CGFloat = size.width * 0.06
-
-            switch number {
-            case 1:
-                // Center of triangle
-                let center = CGPoint(x: size.width * 0.5, y: size.height * 0.55)
-                dot(center, r: r)
-            case 2:
-                // Near left and right corners
-                let p1 = CGPoint(x: left.x + 30, y: left.y - 30)
-                let p2 = CGPoint(x: right.x - 30, y: right.y - 30)
-                dot(p1, r: r)
-                dot(p2, r: r)
-            case 3:
-                // Three corners
-                dot(left, r: r)
-                dot(right, r: r)
-                dot(top, r: r)
-            case 4:
-                // Three corners + center
-                dot(left, r: r)
-                dot(right, r: r)
-                dot(top, r: r)
-                let center = CGPoint(x: size.width * 0.5, y: size.height * 0.55)
-                dot(center, r: r)
-            default:
-                // Fallback: just a single center dot
-                let center = CGPoint(x: size.width * 0.5, y: size.height * 0.55)
-                dot(center, r: r)
-            }
-        }
-        return image.cgImage
-    }
-
-    func createFloor(width: Float, depth: Float, z: Float) -> ModelEntity {
-        let mesh = MeshResource.generatePlane(width: width, depth: depth)
-        var material = SimpleMaterial()
-        material.color = .init(tint: .clear)
-        let floor = ModelEntity(mesh: mesh, materials: [material])
-        floor.position = [0, 0, z]
-        floor.components.set(PhysicsBodyComponent(
-            massProperties: .default,
-            material: .generate(restitution: 0.95),
-            mode: .static
-        ))
-        floor.collision = CollisionComponent(
-            shapes: [.generateBox(width: width, height: 0.01, depth: depth)]
-        )
-        return floor
-    }
-    
-    func addLighting(to anchor: AnchorEntity) {
-        let directionalLight = DirectionalLight()
-        directionalLight.light.intensity = 2000
-        directionalLight.shadow = DirectionalLightComponent.Shadow()
-        
-        let lightAnchor = AnchorEntity()
-        lightAnchor.position = [0, 1, 0]
-        lightAnchor.look(at: [0, 0, 0], from: lightAnchor.position, relativeTo: nil)
-        lightAnchor.addChild(directionalLight)
-        
-        anchor.addChild(lightAnchor)
-    }
-    
     func createDiceFaceTexture(number: Int) -> CGImage? {
         let size = CGSize(width: 512, height: 512)
         let renderer = UIGraphicsImageRenderer(size: size)
 
         let image = renderer.image { context in
-            // Background: black
-            UIColor.black.setFill()
+            // Background: white (dado bianco)
+            UIColor.white.setFill()
             context.fill(CGRect(origin: .zero, size: size))
 
-            // Draw white pips
+            // Draw black pips (puntini neri su sfondo bianco)
             let cg = context.cgContext
             cg.setShouldAntialias(true)
-            cg.setFillColor(UIColor.white.cgColor)
+            cg.setFillColor(UIColor.black.cgColor)
 
             // Reasonable radius for 512x512
             let dotRadius: CGFloat = size.width * 0.085
@@ -615,6 +590,46 @@ struct DiceViewContainer: UIViewRepresentable {
         return image.cgImage
     }
     
+    func createCoinFaceTexture(heads: Bool) -> CGImage? {
+        let size = CGSize(width: 512, height: 512)
+        let renderer = UIGraphicsImageRenderer(size: size)
+        let image = renderer.image { context in
+            let cg = context.cgContext
+            cg.setShouldAntialias(true)
+
+            // Background bianco
+            UIColor.white.setFill()
+            cg.fillEllipse(in: CGRect(x: 0, y: 0, width: size.width, height: size.height))
+
+            // Coin rim
+            cg.setStrokeColor(UIColor(white: 0.7, alpha: 1.0).cgColor)
+            cg.setLineWidth(14)
+            cg.strokeEllipse(in: CGRect(x: 7, y: 7, width: size.width - 14, height: size.height - 14))
+
+            // Inner rim
+            cg.setStrokeColor(UIColor(white: 0.5, alpha: 1.0).cgColor)
+            cg.setLineWidth(4)
+            cg.strokeEllipse(in: CGRect(x: 28, y: 28, width: size.width - 56, height: size.height - 56))
+
+            // Text label (TESTA / CROCE) - nero
+            let text = heads ? "Head" : "Cross"
+            let paragraph = NSMutableParagraphStyle()
+            paragraph.alignment = .center
+            let attributes: [NSAttributedString.Key: Any] = [
+                .font: UIFont.systemFont(ofSize: 120, weight: .black),
+                .foregroundColor: UIColor.black,
+                .paragraphStyle: paragraph,
+                .kern: 2
+            ]
+            let attributed = NSAttributedString(string: text, attributes: attributes)
+            var bounds = attributed.boundingRect(with: CGSize(width: size.width - 80, height: .greatestFiniteMagnitude), options: [.usesLineFragmentOrigin, .usesFontLeading], context: nil)
+            bounds.origin.x = (size.width - bounds.width) / 2
+            bounds.origin.y = (size.height - bounds.height) / 2
+            attributed.draw(in: bounds)
+        }
+        return image.cgImage
+    }
+
     func drawDots(for number: Int, in context: CGContext, size: CGSize, dotRadius: CGFloat) {
         let centerX = size.width / 2
         let centerY = size.height / 2
@@ -692,6 +707,7 @@ struct DiceViewContainer: UIViewRepresentable {
     
     class Coordinator {
         var onResult: ((Int) -> Void)?
+        var onRollStart: (() -> Void)?
         var arView: ARView?
         var dice: ModelEntity?
         var anchor: AnchorEntity?
@@ -708,7 +724,7 @@ struct DiceViewContainer: UIViewRepresentable {
         
         private var sceneUpdateCancellable: (any Cancellable)?
         private var settleTimer: TimeInterval = 0
-        private var lastUpdateTime: TimeInterval?
+        private var totalStillTimer: TimeInterval = 0 // Track total time dice has been still
         private var isRecentering: Bool = false
         private var recenterCooldown: TimeInterval = 0
         private var recenterTimer: Timer?
@@ -717,11 +733,10 @@ struct DiceViewContainer: UIViewRepresentable {
         private var lastRotation: simd_quatf?
         
         private var hapticEngine: CHHapticEngine?
-        private var hapticPlayer: CHHapticAdvancedPatternPlayer?
-        private var wasMoving: Bool = false
-        
         private var hasAnnouncedResult: Bool = false
         private var awaitingResult: Bool = false
+        
+        private var lastCollisionTime: TimeInterval = 0
         
         private func setupHaptics() {
             guard CHHapticEngine.capabilitiesForHardware().supportsHaptics else { return }
@@ -734,41 +749,93 @@ struct DiceViewContainer: UIViewRepresentable {
             }
         }
 
-        private func startRollingHaptics() {
-            guard CHHapticEngine.capabilitiesForHardware().supportsHaptics else {
-                // Fallback: single impact to indicate start
-                UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-                return
-            }
-            // If engine not set up, set it up now
-            if hapticEngine == nil { setupHaptics() }
-            do {
-                // Continuous haptic while the dice is moving
-                let intensity = CHHapticEventParameter(parameterID: .hapticIntensity, value: 0.5)
-                let sharpness = CHHapticEventParameter(parameterID: .hapticSharpness, value: 0.3)
-                let continuous = CHHapticEvent(eventType: .hapticContinuous, parameters: [intensity, sharpness], relativeTime: 0, duration: 10)
-                let pattern = try CHHapticPattern(events: [continuous], parameters: [])
-                hapticPlayer = try hapticEngine?.makeAdvancedPlayer(with: pattern)
-                try hapticPlayer?.start(atTime: 0)
-            } catch {
-                print("Haptics: failed to start player: \(error)")
-            }
+        private func playStartHaptic() {
+            // Haptic all'inizio del lancio
+            let generator = UIImpactFeedbackGenerator(style: .medium)
+            generator.impactOccurred()
         }
 
-        private func stopRollingHaptics() {
-            if CHHapticEngine.capabilitiesForHardware().supportsHaptics {
-                do {
-                    try hapticPlayer?.stop(atTime: 0)
-                    hapticPlayer = nil
-                    // Gentle end tap
-                    let generator = UINotificationFeedbackGenerator()
-                    generator.notificationOccurred(.success)
-                } catch {
-                    print("Haptics: failed to stop player: \(error)")
+        private func playCollisionHaptic() {
+            // Haptic quando sbatte contro i muri
+            let now = CACurrentMediaTime()
+            // Evita troppi haptics ravvicinati
+            guard now - lastCollisionTime > 0.2 else { return }
+            lastCollisionTime = now
+            
+            let generator = UIImpactFeedbackGenerator(style: .light)
+            generator.impactOccurred()
+        }
+
+        private func playStopHaptic() {
+            // Haptic quando si ferma
+            let generator = UINotificationFeedbackGenerator()
+            generator.notificationOccurred(.success)
+        }
+        
+        private func playCelebrationHaptic() {
+            // Sequenza di haptic per la celebrazione (3 secondi totali)
+            let heavyGenerator = UIImpactFeedbackGenerator(style: .heavy)
+            let mediumGenerator = UIImpactFeedbackGenerator(style: .medium)
+            let lightGenerator = UIImpactFeedbackGenerator(style: .light)
+            
+            // Prepara i generatori
+            heavyGenerator.prepare()
+            mediumGenerator.prepare()
+            lightGenerator.prepare()
+            
+            // Sequenza di celebrazione ridotta
+            DispatchQueue.main.asyncAfter(deadline: .now()) {
+                heavyGenerator.impactOccurred()
+            }
+            
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                mediumGenerator.impactOccurred()
+            }
+            
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                lightGenerator.impactOccurred()
+            }
+            
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                heavyGenerator.impactOccurred()
+            }
+            
+            // Se il dispositivo supporta haptics avanzati, usa anche quello
+            if let hapticEngine = hapticEngine {
+                playAdvancedCelebrationHaptic(engine: hapticEngine)
+            }
+        }
+        
+        private func playAdvancedCelebrationHaptic(engine: CHHapticEngine) {
+            // Pattern haptic avanzato per la celebrazione (ridotto a 0.6 secondi)
+            do {
+                let sharpness = CHHapticEventParameter(parameterID: .hapticSharpness, value: 1.0)
+                let intensity = CHHapticEventParameter(parameterID: .hapticIntensity, value: 1.0)
+                
+                var events: [CHHapticEvent] = []
+                
+                // Pattern di celebrazione ridotto
+                let timings: [TimeInterval] = [0.0, 0.1, 0.2, 0.3, 0.4, 0.6]
+                let intensities: [Float] = [1.0, 0.8, 0.6, 0.9, 0.7, 0.5]
+                
+                for (index, timing) in timings.enumerated() {
+                    let intensityParam = CHHapticEventParameter(parameterID: .hapticIntensity, value: intensities[index])
+                    let sharpnessParam = CHHapticEventParameter(parameterID: .hapticSharpness, value: 0.8)
+                    
+                    let event = CHHapticEvent(
+                        eventType: .hapticTransient,
+                        parameters: [intensityParam, sharpnessParam],
+                        relativeTime: timing
+                    )
+                    events.append(event)
                 }
-            } else {
-                // Fallback: light impact to indicate stop
-                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                
+                let pattern = try CHHapticPattern(events: events, parameters: [])
+                let player = try engine.makePlayer(with: pattern)
+                try player.start(atTime: 0)
+                
+            } catch {
+                print("Errore nella creazione del pattern haptic avanzato: \(error)")
             }
         }
         
@@ -776,8 +843,29 @@ struct DiceViewContainer: UIViewRepresentable {
             guard let arView = arView else { return }
             setupHaptics()
             sceneUpdateCancellable?.cancel()
-            sceneUpdateCancellable = arView.scene.subscribe(to: SceneEvents.Update.self) { [weak self] event in
+            
+            // Subscribe to scene updates
+            let sceneSubscription = arView.scene.subscribe(to: SceneEvents.Update.self) { [weak self] event in
                 self?.handleSceneUpdate(event)
+            }
+            
+            // Subscribe to collisions (separate subscription)
+            let collisionSubscription = arView.scene.subscribe(to: CollisionEvents.Began.self) { [weak self] collision in
+                self?.handleCollision(collision)
+            }
+            
+            // Store both subscriptions
+            sceneUpdateCancellable = AnyCancellable {
+                sceneSubscription.cancel()
+                collisionSubscription.cancel()
+            }
+        }
+        
+        private func handleCollision(_ event: CollisionEvents.Began) {
+            // Verifica se il dado ha colpito un muro
+            guard let dice = dice else { return }
+            if event.entityA == dice || event.entityB == dice {
+                playCollisionHaptic()
             }
         }
         
@@ -789,7 +877,7 @@ struct DiceViewContainer: UIViewRepresentable {
                 recenterCooldown -= event.deltaTime
             }
             
-            // Read physics motion state (fallback to pose deltas if motion not available)
+            // Read physics motion state
             var linearSpeed: Float = 0
             var angularSpeed: Float = 0
             if let motion = dice.components[PhysicsMotionComponent.self] {
@@ -806,57 +894,93 @@ struct DiceViewContainer: UIViewRepresentable {
                     angularSpeed = angle / Float(event.deltaTime)
                 }
             }
-            // Compute vertical speed (prefer motion if available)
+            
+            // Compute vertical speed
             var verticalSpeedAbs: Float = 0
             if let motion = dice.components[PhysicsMotionComponent.self] {
                 verticalSpeedAbs = abs(motion.linearVelocity.y)
             } else if let lastPos = lastPosition, event.deltaTime > 0 {
                 verticalSpeedAbs = abs((dice.position.y - lastPos.y) / Float(event.deltaTime))
             }
-            // Consider near-floor when y is close to expected resting height (0.05)
-            let nearFloor = abs(dice.position.y - 0.05) < 0.02
             
-            // Determine moving state
-            let movingThresholdLinear: Float = 0.02
-            let movingThresholdAngular: Float = 0.1
+            // Consider near-floor when y is close to expected resting height (adjusted for larger die)
+            // Il dado ha size 0.15, quindi half = 0.075. Floor è a y=-0.01, quindi il dado a riposo è a y=0.075-0.01=0.065
+            let expectedRestY: Float = 0.075
+            let nearFloor = dice.position.y < 0.15 // More lenient floor detection
+            
+            // Debug logging for troubleshooting
+            if linearSpeed < 0.03 && angularSpeed < 0.12 && !nearFloor {
+                print("⚠️ Dice appears still but not near floor! Y: \(String(format: "%.4f", dice.position.y)), Linear: \(String(format: "%.4f", linearSpeed)), Angular: \(String(format: "%.4f", angularSpeed))")
+            }
+            
+            // Determine moving state - more lenient thresholds
+            let movingThresholdLinear: Float = 0.03
+            let movingThresholdAngular: Float = 0.15
             let isMoving = (linearSpeed > movingThresholdLinear) || (angularSpeed > movingThresholdAngular)
             
-            // Start/stop haptics on transition
-            if isMoving && !wasMoving {
-                startRollingHaptics()
-            }
-            if !isMoving && wasMoving {
-                stopRollingHaptics()
-            }
-            
             if isMoving {
-                // Any movement cancels previous announcement so a new result can be announced later
                 hasAnnouncedResult = false
+                totalStillTimer = 0 // Reset backup timer when moving
+                // Quando il dado si muove, aspettiamo un nuovo risultato
+                if !awaitingResult {
+                    awaitingResult = true
+                }
+            } else {
+                // Dice is not moving, increment backup timer
+                totalStillTimer += event.deltaTime
             }
             
-            // Thresholds for considering the dice as settled (stricter)
-            let linearThreshold: Float = 0.015
-            let angularThreshold: Float = 0.08
-            let verticalThreshold: Float = 0.02
+            // More lenient thresholds for considering the dice as settled
+            let linearThreshold: Float = 0.025
+            let angularThreshold: Float = 0.12
+            let verticalThreshold: Float = 0.03
             
-            if linearSpeed < linearThreshold && angularSpeed < angularThreshold && verticalSpeedAbs < verticalThreshold && nearFloor && awaitingResult && !hasAnnouncedResult {
+            let isSettled = linearSpeed < linearThreshold && angularSpeed < angularThreshold && verticalSpeedAbs < verticalThreshold && nearFloor
+            
+            if isSettled && !isRecentering && recenterCooldown <= 0 {
                 settleTimer += event.deltaTime
                 
-                // Start recentering after 0.6 seconds of being settled
-                if settleTimer > 0.6 && !isRecentering && recenterCooldown <= 0 && !hasAnnouncedResult {
+                // Log ogni mezzo secondo mentre aspetta
+                if Int(settleTimer * 10) % 5 == 0 && settleTimer > 0.1 {
+                    print("Dice settling... timer: \(String(format: "%.2f", settleTimer))s, Linear: \(String(format: "%.4f", linearSpeed)), Angular: \(String(format: "%.4f", angularSpeed))")
+                }
+                
+                // Dopo 0.4 secondi di stabilità (ridotto da 0.6), inizia il recenter
+                if settleTimer > 0.4 {
+                    print("✅ Dice settled for 0.4s, starting recenter. hasAnnounced: \(hasAnnouncedResult), awaiting: \(awaitingResult)")
                     startRecenterAndShowResult()
                 }
             } else {
-                // Reset timer if dice starts moving again
-                settleTimer = 0
-                cancelRecenterTimer()
+                // Reset timer se il dado si muove di nuovo
+                if !isSettled {
+                    if settleTimer > 0 {
+                        print("❌ Dice moved again, resetting settle timer (was at \(String(format: "%.2f", settleTimer))s)")
+                    }
+                    settleTimer = 0
+                }
+                if !isRecentering {
+                    cancelRecenterTimer()
+                }
+                
+                // Backup: force recenter if dice has been still for too long (even if not "settled")
+                if !isMoving && totalStillTimer > 2.0 && !isRecentering && recenterCooldown <= 0 {
+                    print("🔧 BACKUP: Forcing recenter after \(String(format: "%.2f", totalStillTimer))s of stillness")
+                    print("    Y position: \(String(format: "%.4f", dice.position.y)), nearFloor: \(nearFloor)")
+                    startRecenterAndShowResult()
+                    totalStillTimer = 0
+                }
             }
             
-            // Track last pose for next frame
+            // Log periodico dello stato
+            if settleTimer == 0 && linearSpeed > 0.001 {
+                // Log solo occasionalmente quando il dado si muove
+                if Int(dice.position.x * 100) % 10 == 0 {
+                    print("Moving - Linear: \(String(format: "%.4f", linearSpeed)), Angular: \(String(format: "%.4f", angularSpeed)), Y: \(String(format: "%.3f", dice.position.y)), NearFloor: \(nearFloor)")
+                }
+            }
+            
             lastPosition = dice.position
             lastRotation = dice.transform.rotation
-            
-            wasMoving = (linearSpeed > 0.02) || (angularSpeed > 0.1)
         }
         
         private func determineTopFace() -> (number: Int, faceOrientation: simd_quatf)? {
@@ -864,7 +988,6 @@ struct DiceViewContainer: UIViewRepresentable {
             let q = dice.transform.rotation
             let worldUp = SIMD3<Float>(0, 1, 0)
 
-            // Define local face normals and their creation orientations
             let faces: [(normal: SIMD3<Float>, number: Int, orientation: simd_quatf)] = [
                 (SIMD3<Float>(0,  1,  0), 6, simd_quatf(angle: 0, axis: [1, 0, 0])),
                 (SIMD3<Float>(0, -1,  0), 1, simd_quatf(angle: .pi, axis: [1, 0, 0])),
@@ -886,26 +1009,19 @@ struct DiceViewContainer: UIViewRepresentable {
             return (b.number, b.orientation)
         }
 
-        // Added helper method
         private func targetRotationForTop(number: Int) -> simd_quatf {
             switch number {
             case 6:
-                // +Y on top
                 return simd_quatf(angle: 0, axis: [0, 1, 0])
             case 1:
-                // -Y to +Y
                 return simd_quatf(angle: .pi, axis: [1, 0, 0])
             case 2:
-                // +Z to +Y
                 return simd_quatf(angle: -.pi/2, axis: [1, 0, 0])
             case 5:
-                // -Z to +Y
                 return simd_quatf(angle:  .pi/2, axis: [1, 0, 0])
             case 3:
-                // +X to +Y
                 return simd_quatf(angle:  .pi/2, axis: [0, 0, 1])
             case 4:
-                // -X to +Y
                 return simd_quatf(angle: -.pi/2, axis: [0, 0, 1])
             default:
                 return simd_quatf(angle: 0, axis: [0, 1, 0])
@@ -913,24 +1029,26 @@ struct DiceViewContainer: UIViewRepresentable {
         }
         
         private func startRecenterAndShowResult() {
-            guard let dice = dice, !isRecentering else { return }
-            guard awaitingResult else { return }
+            guard let dice = dice, !isRecentering else {
+                print("Cannot start recenter - dice: \(dice != nil), isRecentering: \(isRecentering)")
+                return
+            }
+            
+            print("=== STARTING RECENTER ===")
+            print("Current position: \(dice.position)")
+            print("awaitingResult: \(awaitingResult), hasAnnouncedResult: \(hasAnnouncedResult)")
 
             let currentPos = dice.position
-            // Lift slightly above the floor to avoid interpenetration while rotating
-            let liftedY: Float = max(currentPos.y, 0.07)
+            let liftedY: Float = max(currentPos.y, 0.1) // Lift a bit higher during animation
             let targetPos = SIMD3<Float>(0, liftedY, playPlaneZ)
 
-            // Determine result
             let winningNumber: Int
             let targetRotation: simd_quatf
             if faceCount == 6, let result = determineTopFace() {
                 winningNumber = result.number
                 targetRotation = targetRotationForTop(number: result.number)
             } else {
-                // For non-6-faced configurations, pick a fair random result
                 winningNumber = max(1, Int.random(in: 1...max(1, faceCount)))
-                // Keep current orientation when recentring
                 targetRotation = dice.transform.rotation
             }
 
@@ -939,7 +1057,6 @@ struct DiceViewContainer: UIViewRepresentable {
             isRecentering = true
             recenterCooldown = 5.0
 
-            // Make the body kinematic during the animation to avoid physics fighting the motion
             if var body = dice.components[PhysicsBodyComponent.self] {
                 body.mode = .kinematic
                 dice.components.set(body)
@@ -948,7 +1065,6 @@ struct DiceViewContainer: UIViewRepresentable {
             animateDiceToCenter(to: targetPos, targetRotation: targetRotation) { [weak self] in
                 guard let self = self, let dice = self.dice else { return }
 
-                // Brief highlight: small scale pulse to emphasize the number
                 let originalScale = dice.scale
                 let highlightScale = SIMD3<Float>(repeating: 1.08)
                 var t: Float = 0
@@ -962,41 +1078,42 @@ struct DiceViewContainer: UIViewRepresentable {
                         dice.scale = originalScale
                         timer.invalidate()
 
-                        // Snap to resting height (dice size is 0.1 -> half = 0.05)
-                        dice.position.y = 0.05
+                        // Il dado dovrebbe riposare a y = 0.075 (metà dimensione 0.15/2 sopra il floor a -0.01)
+                        dice.position.y = 0.075
 
-                        // Restore physics to dynamic and zero velocities
                         if var body = dice.components[PhysicsBodyComponent.self] {
                             body.mode = .dynamic
                             dice.components.set(body)
                         }
 
-                        // Reset motion
                         if var motion = dice.components[PhysicsMotionComponent.self] {
                             motion.linearVelocity = .zero
                             motion.angularVelocity = .zero
                             dice.components.set(motion)
                         }
 
-                        // Notify SwiftUI about the result
-                        self.onResult?(winningNumber)
-                        if let arView = self.arView {
-                            let worldPos = dice.position(relativeTo: nil)
-                            if let screenPoint = arView.project(worldPos) {
-                                self.fireworksView?.explode(at: screenPoint, duration: 5.0)
-                            } else {
-                                // Fallback: center of the screen
-                                let center = CGPoint(x: arView.bounds.midX, y: arView.bounds.midY)
-                                self.fireworksView?.explode(at: center, duration: 5.0)
+                        // Mostra sempre il risultato quando il dado si stabilizza
+                        if self.awaitingResult && !self.hasAnnouncedResult {
+                            self.onResult?(winningNumber)
+                            if let arView = self.arView {
+                                let worldPos = dice.position(relativeTo: nil)
+                                if let screenPoint = arView.project(worldPos) {
+                                    self.fireworksView?.explode(at: screenPoint, duration: 3.0) // Ridotto da 8.0 a 3.0 secondi
+                                } else {
+                                    let center = CGPoint(x: arView.bounds.midX, y: arView.bounds.midY)
+                                    self.fireworksView?.explode(at: center, duration: 3.0) // Ridotto da 8.0 a 3.0 secondi
+                                }
                             }
+                            
+                            // Haptic prolungato per i coriandoli (celebrazione)
+                            self.playCelebrationHaptic()
+                            
+                            self.hasAnnouncedResult = true
+                            self.awaitingResult = false
                         }
-                        self.awaitingResult = false
-                        self.hasAnnouncedResult = true
-
+                        
                         self.isRecentering = false
-                        self.stopRollingHaptics()
                     } else {
-                        // ease in-out
                         let p = t * t * (3 - 2 * t)
                         if t < 0.5 {
                             let q = p * 2
@@ -1060,15 +1177,14 @@ struct DiceViewContainer: UIViewRepresentable {
             isRecentering = false
             awaitingResult = false
             hasAnnouncedResult = false
+            settleTimer = 0
+            totalStillTimer = 0 // Reset backup timer
 
             guard let anchor = anchor else { return }
 
-            // Preserve transform if an old die exists
             let oldTransform = dice?.transform
-            // Remove old die
             dice?.removeFromParent()
 
-            // Create new die for the selected face count
             let newDie = makeDie?(faceCount) ?? ModelEntity()
             if let t = oldTransform {
                 newDie.transform = t
@@ -1079,7 +1195,6 @@ struct DiceViewContainer: UIViewRepresentable {
             anchor.addChild(newDie)
             dice = newDie
 
-            // Small pulse to indicate change, then auto-roll
             let original = newDie.scale
             let up = SIMD3<Float>(repeating: 1.06)
             var tVal: Float = 0
@@ -1109,15 +1224,22 @@ struct DiceViewContainer: UIViewRepresentable {
         
         func rollDice() {
             guard let dice = dice else { return }
+            
+            print("\n🎲 === ROLL DICE CALLED ===")
+            
+            // Notify that a new roll is starting (this will hide the winner message)
+            onRollStart?()
+            
+            // Reset di tutti i flag per un nuovo lancio
             awaitingResult = true
             hasAnnouncedResult = false
-            // Cancel any ongoing recentering animation
             cancelRecenterTimer()
-            // Reset recentering state when user interacts
             isRecentering = false
             settleTimer = 0
+            totalStillTimer = 0 // Reset backup timer
             recenterCooldown = 0
-            // Ensure dice is in dynamic mode for physics interactions
+            
+            // Assicurati che il dado sia in modalità dinamica
             let physicsMaterial = PhysicsMaterialResource.generate(
                 staticFriction: 0.3,
                 dynamicFriction: 0.2,
@@ -1128,7 +1250,7 @@ struct DiceViewContainer: UIViewRepresentable {
                 material: physicsMaterial,
                 mode: .dynamic
             ))
-            // Ensure motion component exists after resetting physics body
+            
             if dice.components[PhysicsMotionComponent.self] == nil {
                 dice.components.set(PhysicsMotionComponent())
             }
@@ -1137,15 +1259,24 @@ struct DiceViewContainer: UIViewRepresentable {
                 body.angularDamping = 0.02
                 dice.components.set(body)
             }
-            // Impulses
-            let randomX = Float.random(in: -0.08...0.08)
-            let randomY = Float.random(in: 0.15...0.3)
-            let randomZ = Float.random(in: -0.08...0.08)
+            
+            // Applica gli impulsi casuali
+            let randomX = Float.random(in: -0.12...0.12)
+            let randomY = Float.random(in: 0.2...0.35)
+            let randomZ = Float.random(in: -0.12...0.12)
             dice.applyLinearImpulse([randomX, randomY, randomZ], relativeTo: nil)
-            let randomAngular = SIMD3<Float>(Float.random(in: -3...3), Float.random(in: -3...3), Float.random(in: -3...3))
+            
+            let randomAngular = SIMD3<Float>(
+                Float.random(in: -4...4),
+                Float.random(in: -4...4),
+                Float.random(in: -4...4)
+            )
             dice.applyAngularImpulse(randomAngular, relativeTo: nil)
-            print("Dice roll triggered")
-            startRollingHaptics()
+            
+            print("Dice roll triggered (shake or tap)")
+            
+            // Haptic all'inizio del lancio
+            playStartHaptic()
         }
         
         @objc func handleTap(_ gesture: UITapGestureRecognizer) {
@@ -1174,21 +1305,17 @@ struct DiceViewContainer: UIViewRepresentable {
             guard screenSize.width > 0, screenSize.height > 0 else { return }
             let aspect = Float(screenSize.width / screenSize.height)
             
-            // Area di gioco molto più grande - copre tutto lo schermo
-            let depth: Float = 1.5  // Aumentato da 0.6
-            let width: Float = depth * aspect  // Rimosso il moltiplicatore 0.8
+            let depth: Float = 1.5
+            let width: Float = depth * aspect
             
-            // Remove old entities
             wallEntities.forEach { $0.removeFromParent() }
             wallEntities.removeAll()
             if let floorEntity = floorEntity { floorEntity.removeFromParent() }
             
-            // Crea il pavimento
             let floor = makeFloor?(width, depth, playPlaneZ) ?? ModelEntity()
             anchor.addChild(floor)
             floorEntity = floor
             
-            // Muri INVISIBILI - ModelEntity senza materiale visibile
             let physicsMaterial = PhysicsMaterialResource.generate(
                 staticFriction: 0.02,
                 dynamicFriction: 0.02,
@@ -1199,7 +1326,7 @@ struct DiceViewContainer: UIViewRepresentable {
             let halfD = depth / 2
             let wallHeight: Float = 0.5
             
-            // Front wall (near camera)
+            // Front wall
             let front = ModelEntity()
             front.position = [0, wallHeight/2, playPlaneZ + halfD]
             front.components.set(PhysicsBodyComponent(
@@ -1247,7 +1374,7 @@ struct DiceViewContainer: UIViewRepresentable {
                 shapes: [.generateBox(width: sideThickness, height: wallHeight, depth: depth)]
             )
             
-            // Top wall (ceiling)
+            // Top wall
             let top = ModelEntity()
             top.position = [0, 0.3, playPlaneZ]
             top.components.set(PhysicsBodyComponent(
@@ -1259,19 +1386,16 @@ struct DiceViewContainer: UIViewRepresentable {
                 shapes: [.generateBox(width: width, height: sideThickness, depth: depth)]
             )
             
-            // Aggiungi i muri invisibili
             [front, back, left, right, top].forEach { wall in
                 anchor.addChild(wall)
                 wallEntities.append(wall)
             }
             
-            // After first successful installation, enable physics on the dice
             if !installed {
                 installed = true
                 if let dice = self.dice {
-                    // Place the dice slightly above the floor and enable dynamics
                     var newPos = dice.position
-                    newPos.y = max(newPos.y, 0.08)
+                    newPos.y = max(newPos.y, 0.2) // Adjusted for larger die
                     dice.position = newPos
                     if var body = dice.components[PhysicsBodyComponent.self] {
                         body.mode = .dynamic
@@ -1282,13 +1406,13 @@ struct DiceViewContainer: UIViewRepresentable {
                         motion.angularVelocity = .zero
                         dice.components.set(motion)
                     }
+                    print("Dice enabled at position: \(dice.position)")
                 }
             }
         }
     }
 }
 
-// Fireworks overlay using CAEmitterLayer, positioned in screen space
 final class FireworksOverlay: UIView {
     private var activeEmitters: [CAEmitterLayer] = []
     private var stopTimers: [Timer] = []
@@ -1304,12 +1428,10 @@ final class FireworksOverlay: UIView {
     }
 
     func explode(at point: CGPoint, duration: TimeInterval) {
-        // Throttle explosions to avoid overload
         let now = CACurrentMediaTime()
         if now - lastExplosionTime < minExplosionInterval { return }
         lastExplosionTime = now
 
-        // Cap the number of active emitters
         if activeEmitters.count >= maxActiveEmitters {
             if let oldest = activeEmitters.first {
                 oldest.birthRate = 0
@@ -1319,57 +1441,52 @@ final class FireworksOverlay: UIView {
             }
         }
         
-        // Create a rocket emitter at the given point
         let emitter = CAEmitterLayer()
         emitter.emitterPosition = point
         emitter.emitterShape = .point
         emitter.renderMode = .additive
-        emitter.zPosition = 0 // stays visually behind overlays; AR content is underneath anyway
+        emitter.zPosition = 0
 
-        // Rocket cell (rises up then bursts)
         let rocket = CAEmitterCell()
-        rocket.birthRate = 1
-        rocket.lifetime = 1.0
-        rocket.velocity = 180
-        rocket.velocityRange = 60
-        rocket.emissionLongitude = -.pi/2 // shoot upward
-        rocket.emissionRange = .pi/12
-        rocket.yAcceleration = -90 // fight gravity to go up (UIKit y+ is down)
+        rocket.birthRate = 2 // Aumentato da 1 a 2 per più razzi
+        rocket.lifetime = 1.0 // Ridotto da 1.5 a 1.0
+        rocket.velocity = 200 // Ridotto da 220 a 200
+        rocket.velocityRange = 70 // Ridotto da 80 a 70
+        rocket.emissionLongitude = -.pi/2
+        rocket.emissionRange = .pi/8 // Ridotto leggermente per più precisione
+        rocket.yAcceleration = -90
         rocket.color = UIColor.white.cgColor
-        rocket.redRange = 0.8
-        rocket.greenRange = 0.8
-        rocket.blueRange = 0.8
-        rocket.alphaSpeed = -0.45
-        rocket.scale = 0.5
-        rocket.spin = 1.0
+        rocket.redRange = 0.9 // Aumentato da 0.8 a 0.9
+        rocket.greenRange = 0.9 // Aumentato da 0.8 a 0.9
+        rocket.blueRange = 0.9 // Aumentato da 0.8 a 0.9
+        rocket.alphaSpeed = -0.5 // Aumentato da -0.35 per scomparire prima
+        rocket.scale = 0.6 // Aumentato da 0.5 a 0.6
+        rocket.spin = 1.2 // Aumentato da 1.0 a 1.2
 
-        // Burst cell (brief flash before sparks)
         let burst = CAEmitterCell()
         burst.birthRate = 1
-        burst.lifetime = 0.25
-        burst.scale = 1.1
+        burst.lifetime = 0.25 // Ridotto da 0.35 a 0.25
+        burst.scale = 1.3 // Aumentato da 1.1 a 1.3
         burst.color = UIColor.white.cgColor
 
-        // Spark cells (actual fireworks fragments)
         let spark = CAEmitterCell()
-        spark.birthRate = 160
-        spark.lifetime = 1.6
-        spark.velocity = 150
-        spark.velocityRange = 100
+        spark.birthRate = 180 // Ridotto da 200 a 180
+        spark.lifetime = 1.5 // Ridotto da 2.2 a 1.5 per durare meno
+        spark.velocity = 160 // Ridotto da 180 a 160
+        spark.velocityRange = 100 // Ridotto da 120 a 100
         spark.emissionRange = .pi * 2
-        spark.yAcceleration = 70
-        spark.scale = 0.55
-        spark.scaleRange = 0.25
-        spark.alphaSpeed = -0.5
-        spark.spin = 2.0
-        spark.spinRange = 3.0
+        spark.yAcceleration = 70 // Aumentato da 60 per caduta più veloce
+        spark.scale = 0.65 // Aumentato da 0.55 a 0.65
+        spark.scaleRange = 0.35 // Aumentato da 0.25 a 0.35
+        spark.alphaSpeed = -0.6 // Aumentato da -0.4 per scomparire prima
+        spark.spin = 2.5 // Aumentato da 2.0 a 2.5
+        spark.spinRange = 4.0 // Aumentato da 3.0 a 4.0
         spark.contents = makeSparkImage().cgImage
         spark.color = UIColor.white.cgColor
         spark.redRange = 1.0
         spark.greenRange = 1.0
         spark.blueRange = 1.0
 
-        // Chain: rocket -> burst -> spark
         burst.emitterCells = [spark]
         rocket.emitterCells = [burst]
         emitter.emitterCells = [rocket]
@@ -1377,7 +1494,6 @@ final class FireworksOverlay: UIView {
         layer.addSublayer(emitter)
         activeEmitters.append(emitter)
 
-        // Stop after duration
         let timer = Timer.scheduledTimer(withTimeInterval: duration, repeats: false) { [weak self, weak emitter] _ in
             guard let self = self, let emitter = emitter else { return }
             emitter.birthRate = 0
@@ -1386,8 +1502,6 @@ final class FireworksOverlay: UIView {
             self.activeEmitters.removeAll { $0 == emitter }
         }
         stopTimers.append(timer)
-
-        // Removed the scheduled additional bursts to avoid cascades
     }
 
     private func makeSparkImage() -> UIImage {
@@ -1405,28 +1519,251 @@ final class FireworksOverlay: UIView {
 
 struct CustomizeSheet: View {
     @Binding var faceCount: Int
-    private let options = Array(3...12)
+    private let options = [2, 6, 12]
 
     var body: some View {
         NavigationView {
-            Form {
-                Section(header: Text("Number of faces")) {
-                    Picker("Faces", selection: $faceCount) {
-                        ForEach(options, id: \.self) { n in
-                            Text("\(n) faces").tag(n)
+            ZStack {
+                Color.black.ignoresSafeArea(.all)
+                
+                Form {
+                    Section(header: Text("Number of faces").foregroundColor(.white)) {
+                        Picker("Faces", selection: $faceCount) {
+                            ForEach(options, id: \.self) { n in
+                                Text("\(n) faces").tag(n)
+                            }
                         }
+                        .pickerStyle(.segmented)
+                        .colorScheme(.dark)
                     }
+                    .listRowBackground(Color.clear)
+                    
+                    Section(footer: Text("Choose the dice you like!").foregroundColor(.gray)) {
+                        EmptyView()
+                    }
+                    .listRowBackground(Color.clear)
                 }
-                Section(footer: Text("Al momento la forma fisica resta un cubo; il risultato rispetta il numero di facce selezionato. Possiamo aggiungere forme personalizzate in un secondo passaggio.")) {
-                    EmptyView()
+                .scrollContentBackground(.hidden)
+                .background(Color.black)
+                .navigationTitle("Customize")
+                .navigationBarTitleDisplayMode(.inline)
+                .preferredColorScheme(.dark)
+            }
+        }
+        .preferredColorScheme(.dark)
+    }
+}
+
+struct WinningFaceView: View {
+    let number: Int
+    let faceCount: Int
+    
+    var body: some View {
+        ZStack {
+            // Background circle/shape
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color.white)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .stroke(Color.gray.opacity(0.3), lineWidth: 1)
+                )
+            
+            // Content based on face type
+            Group {
+                if faceCount == 2 {
+                    // Coin face
+                    coinFaceContent
+                } else if faceCount == 12 {
+                    // Dodecahedron - just show the number
+                    dodecahedronFaceContent
+                } else {
+                    // Standard 6-sided dice with dots
+                    diceFaceContent
                 }
             }
-            .navigationTitle("Customize")
-            .navigationBarTitleDisplayMode(.inline)
+        }
+        .aspectRatio(1, contentMode: .fit)
+    }
+    
+    @ViewBuilder
+    private var coinFaceContent: some View {
+        VStack(spacing: 2) {
+            Text(number == 1 ? "Cross" : "Head")
+                .font(.system(size: 10, weight: .bold))
+                .foregroundColor(.black)
+                .multilineTextAlignment(.center)
+        }
+    }
+    
+    @ViewBuilder
+    private var dodecahedronFaceContent: some View {
+        Text("\(number)")
+            .font(.system(size: 32, weight: .bold))
+            .foregroundColor(.black)
+    }
+    
+    @ViewBuilder
+    private var diceFaceContent: some View {
+        GeometryReader { geometry in
+            let size = min(geometry.size.width, geometry.size.height)
+            let dotRadius = size * 0.08
+            let centerX = geometry.size.width / 2
+            let centerY = geometry.size.height / 2
+            let offset = size * 0.25
+            
+            ZStack {
+                // Draw dots based on the number
+                Group {
+                    switch number {
+                    case 1:
+                        Circle()
+                            .fill(Color.black)
+                            .frame(width: dotRadius * 2, height: dotRadius * 2)
+                            .position(x: centerX, y: centerY)
+                    case 2:
+                        Circle()
+                            .fill(Color.black)
+                            .frame(width: dotRadius * 2, height: dotRadius * 2)
+                            .position(x: centerX - offset, y: centerY - offset)
+                        Circle()
+                            .fill(Color.black)
+                            .frame(width: dotRadius * 2, height: dotRadius * 2)
+                            .position(x: centerX + offset, y: centerY + offset)
+                    case 3:
+                        Circle()
+                            .fill(Color.black)
+                            .frame(width: dotRadius * 2, height: dotRadius * 2)
+                            .position(x: centerX - offset, y: centerY - offset)
+                        Circle()
+                            .fill(Color.black)
+                            .frame(width: dotRadius * 2, height: dotRadius * 2)
+                            .position(x: centerX, y: centerY)
+                        Circle()
+                            .fill(Color.black)
+                            .frame(width: dotRadius * 2, height: dotRadius * 2)
+                            .position(x: centerX + offset, y: centerY + offset)
+                    case 4:
+                        Circle()
+                            .fill(Color.black)
+                            .frame(width: dotRadius * 2, height: dotRadius * 2)
+                            .position(x: centerX - offset, y: centerY - offset)
+                        Circle()
+                            .fill(Color.black)
+                            .frame(width: dotRadius * 2, height: dotRadius * 2)
+                            .position(x: centerX + offset, y: centerY - offset)
+                        Circle()
+                            .fill(Color.black)
+                            .frame(width: dotRadius * 2, height: dotRadius * 2)
+                            .position(x: centerX - offset, y: centerY + offset)
+                        Circle()
+                            .fill(Color.black)
+                            .frame(width: dotRadius * 2, height: dotRadius * 2)
+                            .position(x: centerX + offset, y: centerY + offset)
+                    case 5:
+                        Circle()
+                            .fill(Color.black)
+                            .frame(width: dotRadius * 2, height: dotRadius * 2)
+                            .position(x: centerX - offset, y: centerY - offset)
+                        Circle()
+                            .fill(Color.black)
+                            .frame(width: dotRadius * 2, height: dotRadius * 2)
+                            .position(x: centerX + offset, y: centerY - offset)
+                        Circle()
+                            .fill(Color.black)
+                            .frame(width: dotRadius * 2, height: dotRadius * 2)
+                            .position(x: centerX, y: centerY)
+                        Circle()
+                            .fill(Color.black)
+                            .frame(width: dotRadius * 2, height: dotRadius * 2)
+                            .position(x: centerX - offset, y: centerY + offset)
+                        Circle()
+                            .fill(Color.black)
+                            .frame(width: dotRadius * 2, height: dotRadius * 2)
+                            .position(x: centerX + offset, y: centerY + offset)
+                    case 6:
+                        Circle()
+                            .fill(Color.black)
+                            .frame(width: dotRadius * 2, height: dotRadius * 2)
+                            .position(x: centerX - offset, y: centerY - offset)
+                        Circle()
+                            .fill(Color.black)
+                            .frame(width: dotRadius * 2, height: dotRadius * 2)
+                            .position(x: centerX + offset, y: centerY - offset)
+                        Circle()
+                            .fill(Color.black)
+                            .frame(width: dotRadius * 2, height: dotRadius * 2)
+                            .position(x: centerX - offset, y: centerY)
+                        Circle()
+                            .fill(Color.black)
+                            .frame(width: dotRadius * 2, height: dotRadius * 2)
+                            .position(x: centerX + offset, y: centerY)
+                        Circle()
+                            .fill(Color.black)
+                            .frame(width: dotRadius * 2, height: dotRadius * 2)
+                            .position(x: centerX - offset, y: centerY + offset)
+                        Circle()
+                            .fill(Color.black)
+                            .frame(width: dotRadius * 2, height: dotRadius * 2)
+                            .position(x: centerX + offset, y: centerY + offset)
+                    default:
+                        EmptyView()
+                    }
+                }
+            }
         }
     }
 }
 
-#Preview {
+struct CustomizeButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.95 : 1.0)
+            .opacity(configuration.isPressed ? 0.8 : 1.0)
+            .animation(.easeInOut(duration: 0.15), value: configuration.isPressed)
+    }
+}
+
+#Preview("Dice App") {
     DiceView()
+        .preferredColorScheme(.dark)
+}
+
+#Preview("Winning Faces") {
+    ZStack {
+        Color.black.ignoresSafeArea(.all)
+        
+        VStack(spacing: 20) {
+            Text("6-sided dice faces")
+                .font(.headline)
+                .foregroundColor(.white)
+            HStack(spacing: 15) {
+                ForEach(1...6, id: \.self) { number in
+                    WinningFaceView(number: number, faceCount: 6)
+                        .frame(width: 50, height: 50)
+                }
+            }
+            
+            Text("Coin faces")
+                .font(.headline)
+                .foregroundColor(.white)
+            HStack(spacing: 15) {
+                WinningFaceView(number: 1, faceCount: 2)
+                    .frame(width: 60, height: 60)
+                WinningFaceView(number: 2, faceCount: 2)
+                    .frame(width: 60, height: 60)
+            }
+            
+            Text("12-sided dice faces")
+                .font(.headline)
+                .foregroundColor(.white)
+            HStack(spacing: 15) {
+                ForEach([1, 6, 12], id: \.self) { number in
+                    WinningFaceView(number: number, faceCount: 12)
+                        .frame(width: 50, height: 50)
+                }
+            }
+        }
+        .padding()
+    }
+    .preferredColorScheme(.dark)
 }
